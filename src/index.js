@@ -1,8 +1,5 @@
-const core = require('@actions/core');
-const github = require('@actions/github');
-const { updateChangelog } = require('./changelog');
-const { generateReleaseNotes } = require('./generator');
-const { exec } = require('@actions/exec');
+const fs = require('fs').promises;
+const path = require('path');
 
 async function run() {
   try {
@@ -16,18 +13,50 @@ async function run() {
       changelogFile: core.getInput('changelog_file') || 'CHANGELOG.md'
     };
 
+    // Debug logging
+    core.debug(`Working directory: ${process.cwd()}`);
+    core.debug(`Changelog file: ${inputs.changelogFile}`);
+
+    // Verify file exists or create it
+    const changelogPath = path.resolve(inputs.changelogFile);
+    try {
+      await fs.access(changelogPath);
+    } catch {
+      core.info('Creating new changelog file');
+      await fs.writeFile(changelogPath, '# Changelog\n\n');
+    }
+
     // Generate and update
     const releaseNotes = await generateReleaseNotes(inputs.tagName);
-    await updateChangelog(inputs.changelogFile, releaseNotes);
-
-    // Commit changes
-    const hasChanges = await exec('git', ['diff', '--staged', '--quiet'], 
-      { ignoreReturnCode: true }
-    );
+    core.debug(`Generated release notes: ${releaseNotes}`);
     
-    if (hasChanges !== 0) {
+    await updateChangelog(inputs.changelogFile, releaseNotes);
+    
+    // Verify changelog was updated
+    const changelogContent = await fs.readFile(changelogPath, 'utf8');
+    core.debug(`Updated changelog content: ${changelogContent}`);
+
+    // Stage changes explicitly
+    await exec('git', ['add', inputs.changelogFile]);
+
+    // Check for changes with better error handling
+    let hasChanges = false;
+    try {
+      const result = await exec('git', ['diff', '--staged', '--quiet'], 
+        { ignoreReturnCode: true }
+      );
+      hasChanges = result !== 0;
+    } catch (error) {
+      core.warning(`Git diff check failed: ${error.message}`);
+      hasChanges = true;
+    }
+    
+    if (hasChanges) {
+      core.info('Changes detected, committing...');
       await exec('git', ['commit', '-m', `docs: update changelog for ${inputs.tagName}`]);
-      await exec('git', ['push']);
+      await exec('git', ['push', 'origin', 'HEAD']);
+    } else {
+      core.info('No changes to commit');
     }
 
     // Create release
@@ -42,15 +71,11 @@ async function run() {
     });
 
     core.setOutput('release_url', release.data.html_url);
-    core.setOutput('changelog_updated', 'true');
+    core.setOutput('changelog_updated', hasChanges.toString());
 
   } catch (error) {
+    core.error(`Failed with error: ${error.message}`);
+    core.error(`Stack trace: ${error.stack}`);
     core.setFailed(error.message);
   }
-}
-
-module.exports = run;
-
-if (require.main === module) {
-  run();
 }
