@@ -1,0 +1,34 @@
+name: 'Advanced Release Notes Generator'
+description: 'Generates detailed release notes with changelog management'
+author: 'ssoad'
+
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  token:
+    description: 'GitHub token'
+    required: true
+  tag_name:
+    description: 'Release tag name'
+    required: false
+  draft:
+    description: 'Create as draft release'
+    default: 'false'
+  prerelease:
+    description: 'Mark as prerelease'
+    default: 'false'
+  changelog_file:
+    description: 'Path to changelog file'
+    default: 'CHANGELOG.md'
+
+outputs:
+  release_url:
+    description: 'URL of created release'
+  changelog_updated:
+    description: 'Changelog update status'
+
+runs:
+  using: 'node16'
+  main: 'dist/index.js'
