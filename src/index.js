@@ -15,7 +15,7 @@ async function run() {
     await exec('git', ['fetch', '--tags', '--force']);
 
     // 2. Get version info
-    const currentTag = process.env.GITHUB_REF.replace('refs/tags/', '');
+    const currentTag = core.getInput('tag_name') || process.env.GITHUB_REF.replace('refs/tags/', '');
     const previousTag = await getPreviousTag();
     core.info(`Processing tags: ${previousTag} → ${currentTag}`);
     
@@ -158,7 +158,7 @@ async function generateStats(previousTag, currentTag) {
 }
 
 async function updateChangelog(content) {
-  const changelogPath = 'CHANGELOG.md';
+  const changelogPath = core.getInput('changelog_file') || 'CHANGELOG.md';
   let changelog = '';
   
   try {
@@ -191,7 +191,7 @@ async function getDefaultBranch() {
 }
 
 async function commitChanges(branch, tag) {
-  await exec('git', ['add', 'CHANGELOG.md']);
+  await exec('git', ['add', core.getInput('changelog_file') || 'CHANGELOG.md']);
   
   const hasChanges = await exec('git', ['diff', '--staged', '--quiet'], 
     { ignoreReturnCode: true }
@@ -210,6 +210,7 @@ async function commitChanges(branch, tag) {
 
 async function createRelease(tag, body) {
   const token = core.getInput('token');
+  core.debug(`GitHub token: ${token ? 'retrieved' : 'not retrieved'}`);
   const octokit = github.getOctokit(token);
   
   core.info('Creating GitHub release...');
@@ -218,8 +219,8 @@ async function createRelease(tag, body) {
     tag_name: tag,
     name: `Release ${tag}`,
     body,
-    draft: false,
-    prerelease: false
+    draft: core.getInput('draft') === 'true',
+    prerelease: core.getInput('prerelease') === 'true'
   });
   
   core.info(`Release created: ${release.data.html_url}`);
