@@ -30023,14 +30023,19 @@ async function getCommitsByType(type, previousTag, currentTag) {
     await exec('git', [
       'log',
       `${previousTag}..${currentTag}`,
-      '--pretty=format:- [%h](${repoUrl}/commit/%H) %s',
+      '--pretty=format:%H %s',
       `--grep=^${type}`
     ], {
       listeners: {
         stdout: (data) => {
-          output += data.toString()
-            .replace(new RegExp(`^- \\[([a-f0-9]+)\\]\\(${repoUrl}/commit/([a-f0-9]+)\\) ${type}(\\([^)]*\\))?:\\s*`, 'gm'), '- [$1](' + repoUrl + '/commit/$2) ')
-            .replace(/^- /, '- ' + output.charAt(2).toUpperCase() + output.slice(3));
+          const commits = data.toString().trim().split('\n');
+          for (const commit of commits) {
+            const [hash, ...messageParts] = commit.split(' ');
+            let message = messageParts.join(' ')
+              .replace(new RegExp(`^${type}(\\([^)]*\\))?:\\s*`, 'i'), '')
+              .replace(/^./, str => str.toUpperCase());
+            output += `- ${message} ([${hash.substring(0, 7)}](${repoUrl}/commit/${hash}))\n`;
+          }
         }
       },
       silent: true
