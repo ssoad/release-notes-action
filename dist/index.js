@@ -29946,7 +29946,8 @@ async function run() {
     
     // 4. Update changelog
     core.info('Updating changelog...');
-    await updateChangelog(releaseNotes);
+    const changelogContent = await generateChangelogContent(currentTag, previousTag, date);
+    await updateChangelog(changelogContent);
     
     // 5. Commit changes
     const defaultBranch = await getDefaultBranch();
@@ -30003,6 +30004,34 @@ async function generateReleaseContent(currentTag, previousTag, date) {
   let content = `## What's Changed in [${currentTag}] - ${date}\n\n`;
   
   for (const [type, title] of Object.entries(sections)) {
+    const commits = await getCommitsByTypeWithoutLinks(type, previousTag, currentTag);
+    if (commits.trim()) {
+      content += `### ${title}\n${commits}\n\n`;
+    }
+  }
+
+  // Add statistics
+  const stats = await generateStats(previousTag, currentTag);
+  content += stats;
+  
+  return content;
+}
+
+async function generateChangelogContent(currentTag, previousTag, date) {
+  const sections = {
+    'feat': '🚀 Features',
+    'fix': '🐛 Bug Fixes',
+    'docs': '📝 Documentation',
+    'chore': '🧰 Maintenance',
+    'deps': '📦 Dependencies',
+    'refactor': '♻️ Refactoring',
+    'perf': '⚡ Performance',
+    'test': '🧪 Testing'
+  };
+
+  let content = `## What's Changed in [${currentTag}] - ${date}\n\n`;
+  
+  for (const [type, title] of Object.entries(sections)) {
     const commits = await getCommitsByType(type, previousTag, currentTag);
     if (commits.trim()) {
       content += `### ${title}\n${commits}\n\n`;
@@ -30035,6 +30064,34 @@ async function getCommitsByType(type, previousTag, currentTag) {
               .replace(new RegExp(`^${type}(\\([^)]*\\))?:\\s*`, 'i'), '')
               .replace(/^./, str => str.toUpperCase());
             output += `- ${message} ([${hash.substring(0, 7)}](${repoUrl}/commit/${hash}))\n`;
+          }
+        }
+      },
+      silent: true
+    });
+  } catch (error) {
+    core.warning(`Error getting commits for type ${type}: ${error.message}`);
+  }
+  return output;
+}
+
+async function getCommitsByTypeWithoutLinks(type, previousTag, currentTag) {
+  let output = '';
+  try {
+    await exec('git', [
+      'log',
+      `${previousTag}..${currentTag}`,
+      '--pretty=format:%s',
+      `--grep=^${type}`
+    ], {
+      listeners: {
+        stdout: (data) => {
+          const commits = data.toString().trim().split('\n');
+          for (const commit of commits) {
+            let message = commit
+              .replace(new RegExp(`^${type}(\\([^)]*\\))?:\\s*`, 'i'), '')
+              .replace(/^./, str => str.toUpperCase());
+            output += `- ${message}\n`;
           }
         }
       },
