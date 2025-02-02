@@ -30129,7 +30129,7 @@ async function commitChanges(branch, tag) {
 }
 
 async function createRelease(tag, body) {
-  const token = core.getInput('github_token');
+  const token = core.getInput('token');
   const octokit = github.getOctokit(token);
   
   core.info('Creating GitHub release...');
