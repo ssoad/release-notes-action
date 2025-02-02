@@ -1,37 +1,46 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
-const { generateReleaseNotes } = require('./generator');
 const { updateChangelog } = require('./changelog');
+const { generateReleaseNotes } = require('./generator');
+const { exec } = require('@actions/exec');
 
 async function run() {
   try {
-    // 1. Get action inputs
+    // Setup git config
+    await exec('git', ['config', 'user.name', 'github-actions[bot]']);
+    await exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+
     const inputs = {
       token: core.getInput('token'),
       tagName: core.getInput('tag_name') || github.context.ref.replace('refs/tags/', ''),
-      draft: core.getInput('draft') === 'true',
-      prerelease: core.getInput('prerelease') === 'true',
       changelogFile: core.getInput('changelog_file') || 'CHANGELOG.md'
     };
 
-    // 2. Generate release notes
+    // Generate and update
     const releaseNotes = await generateReleaseNotes(inputs.tagName);
-
-    // 3. Update changelog
     await updateChangelog(inputs.changelogFile, releaseNotes);
 
-    // 4. Create GitHub release
+    // Commit changes
+    const hasChanges = await exec('git', ['diff', '--staged', '--quiet'], 
+      { ignoreReturnCode: true }
+    );
+    
+    if (hasChanges !== 0) {
+      await exec('git', ['commit', '-m', `docs: update changelog for ${inputs.tagName}`]);
+      await exec('git', ['push']);
+    }
+
+    // Create release
     const octokit = github.getOctokit(inputs.token);
     const release = await octokit.rest.repos.createRelease({
       ...github.context.repo,
       tag_name: inputs.tagName,
       name: `Release ${inputs.tagName}`,
       body: releaseNotes,
-      draft: inputs.draft,
-      prerelease: inputs.prerelease
+      draft: false,
+      prerelease: false
     });
 
-    // 5. Set outputs
     core.setOutput('release_url', release.data.html_url);
     core.setOutput('changelog_updated', 'true');
 
@@ -40,4 +49,8 @@ async function run() {
   }
 }
 
-run();
+module.exports = run;
+
+if (require.main === module) {
+  run();
+}
