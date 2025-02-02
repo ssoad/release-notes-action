@@ -1,18 +1,15 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
-const { exec } = require('@actions/exec');
-const fs = require('fs').promises;
-const path = require('path');
+const { setupGit, getPreviousTag, getDefaultBranch, commitChanges } = require('./git');
+const { updateChangelog } = require('./changelog');
+const { generateReleaseContent, generateChangelogContent } = require('./releaseContent');
 
 async function run() {
   try {
     core.info('Starting release process...');
     
     // 1. Setup git
-    await exec('git', ['config', '--global', '--add', 'safe.directory', process.cwd()]);
-    await exec('git', ['config', 'user.name', 'github-actions[bot]']);
-    await exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
-    await exec('git', ['fetch', '--tags', '--force']);
+    await setupGit();
 
     // 2. Get version info
     const currentTag = core.getInput('tag_name') || process.env.GITHUB_REF.replace('refs/tags/', '');
@@ -26,12 +23,13 @@ async function run() {
     
     // 4. Update changelog
     core.info('Updating changelog...');
+    const changelogPath = core.getInput('changelog_file') || 'CHANGELOG.md';
     const changelogContent = await generateChangelogContent(currentTag, previousTag, date);
-    await updateChangelog(changelogContent);
+    await updateChangelog(changelogContent, changelogPath);
     
     // 5. Commit changes
     const defaultBranch = await getDefaultBranch();
-    await commitChanges(defaultBranch, currentTag);
+    await commitChanges(defaultBranch, currentTag, changelogPath);
     
     // 6. Create release
     await createRelease(currentTag, releaseNotes);
@@ -43,236 +41,10 @@ async function run() {
   }
 }
 
-async function getPreviousTag() {
-  try {
-    let output = '';
-    await exec('git', ['describe', '--tags', '--abbrev=0', 'HEAD^'], {
-      listeners: {
-        stdout: (data) => { output += data.toString(); }
-      },
-      silent: true
-    });
-    return output.trim();
-  } catch {
-    return await getFirstCommit();
-  }
-}
-
-async function getFirstCommit() {
-  let output = '';
-  await exec('git', ['rev-list', '--max-parents=0', 'HEAD'], {
-    listeners: {
-      stdout: (data) => { output += data.toString(); }
-    },
-    silent: true
-  });
-  return output.trim();
-}
-
-async function generateReleaseContent(currentTag, previousTag, date) {
-  const sections = {
-    'feat': '🚀 Features',
-    'fix': '🐛 Bug Fixes',
-    'docs': '📝 Documentation',
-    'chore': '🧰 Maintenance',
-    'deps': '📦 Dependencies',
-    'refactor': '♻️ Refactoring',
-    'perf': '⚡ Performance',
-    'test': '🧪 Testing'
-  };
-
-  let content = `## What's Changed in [${currentTag}] - ${date}\n\n`;
-  
-  for (const [type, title] of Object.entries(sections)) {
-    const commits = await getCommitsByTypeWithoutLinks(type, previousTag, currentTag);
-    if (commits.trim()) {
-      content += `### ${title}\n${commits}\n\n`;
-    }
-  }
-
-  // Add statistics
-  const stats = await generateStats(previousTag, currentTag);
-  content += stats;
-  
-  return content;
-}
-
-async function generateChangelogContent(currentTag, previousTag, date) {
-  const sections = {
-    'feat': '🚀 Features',
-    'fix': '🐛 Bug Fixes',
-    'docs': '📝 Documentation',
-    'chore': '🧰 Maintenance',
-    'deps': '📦 Dependencies',
-    'refactor': '♻️ Refactoring',
-    'perf': '⚡ Performance',
-    'test': '🧪 Testing'
-  };
-
-  let content = `## What's Changed in [${currentTag}] - ${date}\n\n`;
-  
-  for (const [type, title] of Object.entries(sections)) {
-    const commits = await getCommitsByType(type, previousTag, currentTag);
-    if (commits.trim()) {
-      content += `### ${title}\n${commits}\n\n`;
-    }
-  }
-
-  // Add statistics
-  const stats = await generateStats(previousTag, currentTag);
-  content += stats;
-  
-  return content;
-}
-
-async function getCommitsByType(type, previousTag, currentTag) {
-  const repoUrl = `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}`;
-  let output = '';
-  try {
-    await exec('git', [
-      'log',
-      `${previousTag}..${currentTag}`,
-      '--pretty=format:%H %s',
-      `--grep=^${type}`
-    ], {
-      listeners: {
-        stdout: (data) => {
-          const commits = data.toString().trim().split('\n');
-          for (const commit of commits) {
-            const [hash, ...messageParts] = commit.split(' ');
-            let message = messageParts.join(' ')
-              .replace(new RegExp(`^${type}(\\([^)]*\\))?:\\s*`, 'i'), '')
-              .replace(/^./, str => str.toUpperCase());
-            output += `- ${message} ([${hash.substring(0, 7)}](${repoUrl}/commit/${hash}))\n`;
-          }
-        }
-      },
-      silent: true
-    });
-  } catch (error) {
-    core.warning(`Error getting commits for type ${type}: ${error.message}`);
-  }
-  return output;
-}
-
-async function getCommitsByTypeWithoutLinks(type, previousTag, currentTag) {
-  let output = '';
-  try {
-    await exec('git', [
-      'log',
-      `${previousTag}..${currentTag}`,
-      '--pretty=format:%s',
-      `--grep=^${type}`
-    ], {
-      listeners: {
-        stdout: (data) => {
-          const commits = data.toString().trim().split('\n');
-          for (const commit of commits) {
-            let message = commit
-              .replace(new RegExp(`^${type}(\\([^)]*\\))?:\\s*`, 'i'), '')
-              .replace(/^./, str => str.toUpperCase());
-            output += `- ${message}\n`;
-          }
-        }
-      },
-      silent: true
-    });
-  } catch (error) {
-    core.warning(`Error getting commits for type ${type}: ${error.message}`);
-  }
-  return output;
-}
-
-async function generateStats(previousTag, currentTag) {
-  const repo = `${github.context.repo.owner}/${github.context.repo.repo}`;
-  let stats = '### 📝 Details\n\n<details>\n<summary>View Changes</summary>\n\n';
-  stats += '📊 **Statistics**\n';
-  
-  let commits = '0', files = '0';
-  
-  try {
-    let output = '';
-    await exec('git', ['rev-list', '--count', `${previousTag}..${currentTag}`], {
-      listeners: { stdout: (data) => { output += data.toString(); } }
-    });
-    commits = output.trim();
-  } catch (error) {
-    core.warning(`Error getting commit count: ${error.message}`);
-  }
-  
-  try {
-    let output = '';
-    await exec('git', ['diff', '--name-only', previousTag, currentTag], {
-      listeners: { stdout: (data) => { output += data.toString(); } }
-    });
-    files = output.trim().split('\n').filter(Boolean).length.toString();
-  } catch (error) {
-    core.warning(`Error getting changed files: ${error.message}`);
-  }
-  
-  stats += `- Commits: \`${commits}\`\n`;
-  stats += `- Files changed: \`${files}\`\n\n`;
-  stats += '🔍 **Compare Changes**\n';
-  stats += `[\`${previousTag} → ${currentTag}\`](https://github.com/${repo}/compare/${previousTag}...${currentTag})\n`;
-  stats += '</details>\n\n';
-  stats += `[${currentTag}]: https://github.com/${repo}/releases/tag/${currentTag}\n`;
-  
-  return stats;
-}
-
-async function updateChangelog(content) {
-  const changelogPath = core.getInput('changelog_file') || 'CHANGELOG.md';
-  let changelog = '';
-  
-  try {
-    changelog = await fs.readFile(changelogPath, 'utf8');
-    core.info('Existing changelog found');
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      changelog = '# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n';
-      core.info('Creating new changelog');
-    } else {
-      throw error;
-    }
-  }
-  
-  const lines = changelog.split('\n');
-  const header = lines.slice(0, 4).join('\n');
-  const existingContent = lines.slice(4).join('\n');
-  
-  core.debug('Writing updated changelog');
-  await fs.writeFile(changelogPath, `${header}\n${content}\n${existingContent}`);
-  core.info('Changelog updated successfully');
-}
-
-async function getDefaultBranch() {
-  let output = '';
-  await exec('git', ['rev-parse', '--abbrev-ref', 'origin/HEAD'], {
-    listeners: { stdout: (data) => { output += data.toString(); } }
-  });
-  return output.trim().replace('origin/', '');
-}
-
-async function commitChanges(branch, tag) {
-  await exec('git', ['add', core.getInput('changelog_file') || 'CHANGELOG.md']);
-  
-  const hasChanges = await exec('git', ['diff', '--staged', '--quiet'], 
-    { ignoreReturnCode: true }
-  ) !== 0;
-  
-  if (hasChanges) {
-    core.info('Changes detected, committing...');
-    await exec('git', ['checkout', branch]);
-    await exec('git', ['commit', '-m', `docs: update changelog for ${tag}`]);
-    await exec('git', ['push', 'origin', branch]);
-    core.info('Changes committed and pushed');
-  } else {
-    core.info('No changes to commit');
-  }
-}
-
 async function createRelease(tag, body) {
   const token = core.getInput('token');
+  const draft = core.getInput('draft') === 'true';
+  const prerelease = core.getInput('prerelease') === 'true';
   core.debug(`GitHub token: ${token ? 'retrieved' : 'not retrieved'}`);
   const octokit = github.getOctokit(token);
   
@@ -282,8 +54,8 @@ async function createRelease(tag, body) {
     tag_name: tag,
     name: `Release ${tag}`,
     body,
-    draft: core.getInput('draft') === 'true',
-    prerelease: core.getInput('prerelease') === 'true'
+    draft,
+    prerelease
   });
   
   core.info(`Release created: ${release.data.html_url}`);

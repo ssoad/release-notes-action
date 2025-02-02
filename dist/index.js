@@ -29915,52 +29915,52 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
-/***/ 5105:
+/***/ 8539:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const core = __nccwpck_require__(7484);
-const github = __nccwpck_require__(3228);
-const { exec } = __nccwpck_require__(5236);
 const fs = (__nccwpck_require__(9896).promises);
-const path = __nccwpck_require__(6928);
+const core = __nccwpck_require__(7484);
 
-async function run() {
+async function updateChangelog(content, changelogPath = 'CHANGELOG.md') {
+  let changelog = '';
+  
   try {
-    core.info('Starting release process...');
-    
-    // 1. Setup git
-    await exec('git', ['config', '--global', '--add', 'safe.directory', process.cwd()]);
-    await exec('git', ['config', 'user.name', 'github-actions[bot]']);
-    await exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
-    await exec('git', ['fetch', '--tags', '--force']);
-
-    // 2. Get version info
-    const currentTag = core.getInput('tag_name') || process.env.GITHUB_REF.replace('refs/tags/', '');
-    const previousTag = await getPreviousTag();
-    core.info(`Processing tags: ${previousTag} → ${currentTag}`);
-    
-    // 3. Generate release content
-    const date = new Date().toISOString().split('T')[0];
-    const releaseNotes = await generateReleaseContent(currentTag, previousTag, date);
-    core.debug(`Generated release notes: ${releaseNotes}`);
-    
-    // 4. Update changelog
-    core.info('Updating changelog...');
-    const changelogContent = await generateChangelogContent(currentTag, previousTag, date);
-    await updateChangelog(changelogContent);
-    
-    // 5. Commit changes
-    const defaultBranch = await getDefaultBranch();
-    await commitChanges(defaultBranch, currentTag);
-    
-    // 6. Create release
-    await createRelease(currentTag, releaseNotes);
-    core.info('Release process completed successfully');
-
+    changelog = await fs.readFile(changelogPath, 'utf8');
+    core.info('Existing changelog found');
   } catch (error) {
-    core.error(`Failed: ${error.message}`);
-    core.setFailed(error.message);
+    if (error.code === 'ENOENT') {
+      changelog = '# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n';
+      core.info('Creating new changelog');
+    } else {
+      throw error;
+    }
   }
+  
+  const lines = changelog.split('\n');
+  const header = lines.slice(0, 4).join('\n');
+  const existingContent = lines.slice(4).join('\n');
+  
+  core.debug('Writing updated changelog');
+  await fs.writeFile(changelogPath, `${header}\n${content}\n${existingContent}`);
+  core.info('Changelog updated successfully');
+}
+
+module.exports = {
+  updateChangelog
+};
+
+/***/ }),
+
+/***/ 5661:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { exec } = __nccwpck_require__(5236);
+
+async function setupGit() {
+  await exec('git', ['config', '--global', '--add', 'safe.directory', process.cwd()]);
+  await exec('git', ['config', 'user.name', 'github-actions[bot]']);
+  await exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+  await exec('git', ['fetch', '--tags', '--force']);
 }
 
 async function getPreviousTag() {
@@ -29988,6 +29988,120 @@ async function getFirstCommit() {
   });
   return output.trim();
 }
+
+async function getDefaultBranch() {
+  let output = '';
+  await exec('git', ['rev-parse', '--abbrev-ref', 'origin/HEAD'], {
+    listeners: { stdout: (data) => { output += data.toString(); } }
+  });
+  return output.trim().replace('origin/', '');
+}
+
+async function commitChanges(branch, tag, changelogFile) {
+  await exec('git', ['add', changelogFile]);
+  
+  const hasChanges = await exec('git', ['diff', '--staged', '--quiet'], 
+    { ignoreReturnCode: true }
+  ) !== 0;
+  
+  if (hasChanges) {
+    await exec('git', ['checkout', branch]);
+    await exec('git', ['commit', '-m', `docs: update changelog for ${tag}`]);
+    await exec('git', ['push', 'origin', branch]);
+  }
+}
+
+module.exports = {
+  setupGit,
+  getPreviousTag,
+  getFirstCommit,
+  getDefaultBranch,
+  commitChanges
+};
+
+/***/ }),
+
+/***/ 5105:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const core = __nccwpck_require__(7484);
+const github = __nccwpck_require__(3228);
+const { setupGit, getPreviousTag, getDefaultBranch, commitChanges } = __nccwpck_require__(5661);
+const { updateChangelog } = __nccwpck_require__(8539);
+const { generateReleaseContent, generateChangelogContent } = __nccwpck_require__(2507);
+
+async function run() {
+  try {
+    core.info('Starting release process...');
+    
+    // 1. Setup git
+    await setupGit();
+
+    // 2. Get version info
+    const currentTag = core.getInput('tag_name') || process.env.GITHUB_REF.replace('refs/tags/', '');
+    const previousTag = await getPreviousTag();
+    core.info(`Processing tags: ${previousTag} → ${currentTag}`);
+    
+    // 3. Generate release content
+    const date = new Date().toISOString().split('T')[0];
+    const releaseNotes = await generateReleaseContent(currentTag, previousTag, date);
+    core.debug(`Generated release notes: ${releaseNotes}`);
+    
+    // 4. Update changelog
+    core.info('Updating changelog...');
+    const changelogPath = core.getInput('changelog_file') || 'CHANGELOG.md';
+    const changelogContent = await generateChangelogContent(currentTag, previousTag, date);
+    await updateChangelog(changelogContent, changelogPath);
+    
+    // 5. Commit changes
+    const defaultBranch = await getDefaultBranch();
+    await commitChanges(defaultBranch, currentTag, changelogPath);
+    
+    // 6. Create release
+    await createRelease(currentTag, releaseNotes);
+    core.info('Release process completed successfully');
+
+  } catch (error) {
+    core.error(`Failed: ${error.message}`);
+    core.setFailed(error.message);
+  }
+}
+
+async function createRelease(tag, body) {
+  const token = core.getInput('token');
+  const draft = core.getInput('draft') === 'true';
+  const prerelease = core.getInput('prerelease') === 'true';
+  core.debug(`GitHub token: ${token ? 'retrieved' : 'not retrieved'}`);
+  const octokit = github.getOctokit(token);
+  
+  core.info('Creating GitHub release...');
+  const release = await octokit.rest.repos.createRelease({
+    ...github.context.repo,
+    tag_name: tag,
+    name: `Release ${tag}`,
+    body,
+    draft,
+    prerelease
+  });
+  
+  core.info(`Release created: ${release.data.html_url}`);
+  core.setOutput('release_url', release.data.html_url);
+}
+
+if (require.main === require.cache[eval('__filename')]) {
+  run();
+}
+
+module.exports = run;
+
+/***/ }),
+
+/***/ 2507:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { exec } = __nccwpck_require__(5236);
+const core = __nccwpck_require__(7484);
+const github = __nccwpck_require__(3228);
 
 async function generateReleaseContent(currentTag, previousTag, date) {
   const sections = {
@@ -30140,81 +30254,13 @@ async function generateStats(previousTag, currentTag) {
   return stats;
 }
 
-async function updateChangelog(content) {
-  const changelogPath = core.getInput('changelog_file') || 'CHANGELOG.md';
-  let changelog = '';
-  
-  try {
-    changelog = await fs.readFile(changelogPath, 'utf8');
-    core.info('Existing changelog found');
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      changelog = '# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n';
-      core.info('Creating new changelog');
-    } else {
-      throw error;
-    }
-  }
-  
-  const lines = changelog.split('\n');
-  const header = lines.slice(0, 4).join('\n');
-  const existingContent = lines.slice(4).join('\n');
-  
-  core.debug('Writing updated changelog');
-  await fs.writeFile(changelogPath, `${header}\n${content}\n${existingContent}`);
-  core.info('Changelog updated successfully');
-}
-
-async function getDefaultBranch() {
-  let output = '';
-  await exec('git', ['rev-parse', '--abbrev-ref', 'origin/HEAD'], {
-    listeners: { stdout: (data) => { output += data.toString(); } }
-  });
-  return output.trim().replace('origin/', '');
-}
-
-async function commitChanges(branch, tag) {
-  await exec('git', ['add', core.getInput('changelog_file') || 'CHANGELOG.md']);
-  
-  const hasChanges = await exec('git', ['diff', '--staged', '--quiet'], 
-    { ignoreReturnCode: true }
-  ) !== 0;
-  
-  if (hasChanges) {
-    core.info('Changes detected, committing...');
-    await exec('git', ['checkout', branch]);
-    await exec('git', ['commit', '-m', `docs: update changelog for ${tag}`]);
-    await exec('git', ['push', 'origin', branch]);
-    core.info('Changes committed and pushed');
-  } else {
-    core.info('No changes to commit');
-  }
-}
-
-async function createRelease(tag, body) {
-  const token = core.getInput('token');
-  core.debug(`GitHub token: ${token ? 'retrieved' : 'not retrieved'}`);
-  const octokit = github.getOctokit(token);
-  
-  core.info('Creating GitHub release...');
-  const release = await octokit.rest.repos.createRelease({
-    ...github.context.repo,
-    tag_name: tag,
-    name: `Release ${tag}`,
-    body,
-    draft: core.getInput('draft') === 'true',
-    prerelease: core.getInput('prerelease') === 'true'
-  });
-  
-  core.info(`Release created: ${release.data.html_url}`);
-  core.setOutput('release_url', release.data.html_url);
-}
-
-if (require.main === require.cache[eval('__filename')]) {
-  run();
-}
-
-module.exports = run;
+module.exports = {
+  generateReleaseContent,
+  generateChangelogContent,
+  getCommitsByType,
+  getCommitsByTypeWithoutLinks,
+  generateStats
+};
 
 /***/ }),
 
