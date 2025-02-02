@@ -22,8 +22,10 @@ async function run() {
     // 3. Generate release content
     const date = new Date().toISOString().split('T')[0];
     const releaseNotes = await generateReleaseContent(currentTag, previousTag, date);
+    core.debug(`Generated release notes: ${releaseNotes}`);
     
     // 4. Update changelog
+    core.info('Updating changelog...');
     await updateChangelog(releaseNotes);
     
     // 5. Commit changes
