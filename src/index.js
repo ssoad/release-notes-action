@@ -199,9 +199,9 @@ async function commitChanges(branch, tag) {
   
   if (hasChanges) {
     core.info('Changes detected, committing...');
-    await exec('git', ['checkout', '-B', branch]);
+    await exec('git', ['checkout', branch]);
     await exec('git', ['commit', '-m', `docs: update changelog for ${tag}`]);
-    await exec('git', ['push', '-f', 'origin', branch]);
+    await exec('git', ['push', 'origin', branch]);
     core.info('Changes committed and pushed');
   } else {
     core.info('No changes to commit');
