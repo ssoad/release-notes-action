@@ -68,9 +68,13 @@ jobs:
 
  
       - name: Generate Release Notes
-        uses: ssoad/release-notes-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: ssoad/release-notes-action@v6.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref }}
+          draft: false
+          prerelease: false
+          changelog_file: 'CHANGELOG.md'
 ```
 
 
