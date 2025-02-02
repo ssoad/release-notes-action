@@ -97,18 +97,19 @@ async function generateReleaseContent(currentTag, previousTag, date) {
 }
 
 async function getCommitsByType(type, previousTag, currentTag) {
+  const repoUrl = `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}`;
   let output = '';
   try {
     await exec('git', [
       'log',
       `${previousTag}..${currentTag}`,
-      '--pretty=format:- %s',
+      '--pretty=format:- [%h](${repoUrl}/commit/%H) %s',
       `--grep=^${type}`
     ], {
       listeners: {
         stdout: (data) => {
           output += data.toString()
-            .replace(new RegExp(`^- ${type}(\\([^)]*\\))?:\\s*`, 'gm'), '- ')
+            .replace(new RegExp(`^- \\[([a-f0-9]+)\\]\\(${repoUrl}/commit/([a-f0-9]+)\\) ${type}(\\([^)]*\\))?:\\s*`, 'gm'), '- [$1](' + repoUrl + '/commit/$2) ')
             .replace(/^- /, '- ' + output.charAt(2).toUpperCase() + output.slice(3));
         }
       },
